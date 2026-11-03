@@ -1,6 +1,18 @@
 
 import time
+import os
+import tempfile
 import streamlit as st
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from core.regulation_pipeline import run_regulation_pipeline
+from core.meta_client import MetaAPIError
+from core.mission_timing import get_mission_time_limit, is_timed_mode, format_clock
 
 from visualization.scene_3d import build_3d_model
 from visualization.city_world import build_city_world, DISTRICTS
@@ -22,7 +34,7 @@ st.set_page_config(
 # GAME CONFIGURATION
 # ============================================================
 
-QUEST_DURATION = 60
+COMPETITIVE_DURATION_SECONDS = 5 * 60
 
 SITE_WIDTH = 40.0
 SITE_DEPTH = 60.0
@@ -71,6 +83,9 @@ DEFAULTS = {
 
     "oracle_question": "",
     "oracle_answer": None,
+
+    # Explicitly human-approved constraints for demo simulation only.
+    "approved_demo_constraints": {},
 
     "last_reward": None,
     "last_level_up": None,
@@ -211,12 +226,15 @@ def start_quest():
     now = time.time()
 
     st.session_state.quest_started_at = now
-    st.session_state.quest_deadline = now + QUEST_DURATION
+    time_limit = get_mission_time_limit(st.session_state.game_mode)
+    st.session_state.quest_deadline = now + time_limit if time_limit is not None else None
     st.session_state.quest_status = "active"
 
 
 def record_failed_attempt():
     if st.session_state.quest_status != "active":
+        return
+    if not is_timed_mode(st.session_state.game_mode):
         return
 
     st.session_state.quest_status = "failed"
@@ -246,8 +264,12 @@ def complete_mission(is_legal):
 
     now = time.time()
 
+    # Campaign is untimed: no speed bonus is awarded or withheld.
+    # Competitive missions receive the speed bonus only when completed in time.
     completed_in_time = (
-        now <= st.session_state.quest_deadline
+        is_timed_mode(st.session_state.game_mode)
+        and st.session_state.quest_deadline is not None
+        and now <= st.session_state.quest_deadline
     )
 
     reward = calculate_mission_reward(
@@ -378,6 +400,59 @@ st.markdown(
         color: #C0D0FF !important;
     }
 
+
+    /* Accessible, consistent controls: high contrast in every state. */
+    div.stButton > button {
+        min-height: 46px;
+        padding: 0.62rem 1rem;
+        border-radius: 11px;
+        font-size: 0.96rem;
+        font-weight: 800 !important;
+        letter-spacing: 0.01em;
+        color: #FFFFFF !important;
+        background: linear-gradient(100deg, #405FCB, #7052C7) !important;
+        border: 1px solid #AFC2FF !important;
+        opacity: 1 !important;
+        white-space: normal !important;
+        line-height: 1.25 !important;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.22);
+    }
+    div.stButton > button p, div.stButton > button span {
+        color: #FFFFFF !important;
+        font-weight: 800 !important;
+    }
+    div.stButton > button:hover:not(:disabled) {
+        background: linear-gradient(100deg, #5878EA, #896BE0) !important;
+        border-color: #FFFFFF !important;
+        transform: translateY(-1px);
+        box-shadow: 0 0 0 2px rgba(190,205,255,0.22), 0 8px 18px rgba(0,0,0,0.24);
+    }
+    div.stButton > button:focus-visible {
+        outline: 3px solid #F5D76E !important;
+        outline-offset: 3px !important;
+    }
+    div.stButton > button:disabled {
+        color: #E5EAF7 !important;
+        background: #35415C !important;
+        border: 1px solid #7F8EAD !important;
+        opacity: 1 !important;
+        cursor: not-allowed !important;
+        filter: none !important;
+    }
+    div.stButton > button:disabled p, div.stButton > button:disabled span {
+        color: #E5EAF7 !important;
+        opacity: 1 !important;
+    }
+    [data-testid="stFileUploader"] button {
+        color: #18233D !important;
+        background: #F2F5FF !important;
+        border: 1px solid #AAB8D8 !important;
+        font-weight: 800 !important;
+    }
+    [data-testid="stFileUploader"] button p, [data-testid="stFileUploader"] button span {
+        color: #18233D !important;
+    }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -471,15 +546,32 @@ st.subheader("🎮 SELECT GAME MODE")
 
 mode1, mode2 = st.columns(2)
 
+mode_locked = st.session_state.quest_status == "active"
+
 with mode1:
-    if st.button("🌆 CAMPAIGN MODE", width="stretch"):
+    if st.button(
+        "🌆 CAMPAIGN MODE · SELECTED" if st.session_state.game_mode == "Campaign" else "🌆 CAMPAIGN MODE",
+        width="stretch",
+        type="primary" if st.session_state.game_mode == "Campaign" else "secondary",
+        disabled=mode_locked,
+        key="select_campaign_mode",
+    ):
         st.session_state.game_mode = "Campaign"
         st.rerun()
 
 with mode2:
-    if st.button("⚡ COMPETITIVE CHALLENGES", width="stretch"):
+    if st.button(
+        "⚡ COMPETITIVE CHALLENGES · SELECTED" if st.session_state.game_mode == "Competitive" else "⚡ COMPETITIVE CHALLENGES",
+        width="stretch",
+        type="primary" if st.session_state.game_mode == "Competitive" else "secondary",
+        disabled=mode_locked,
+        key="select_competitive_mode",
+    ):
         st.session_state.game_mode = "Competitive"
         st.rerun()
+
+if mode_locked:
+    st.caption("Finish or reset the current mission before changing game mode.")
 
 st.caption(f"ACTIVE MODE: {st.session_state.game_mode.upper()}")
 
@@ -578,6 +670,8 @@ st.sidebar.write("Front setback: 10 ft")
 st.sidebar.write("Other setbacks: 5 ft")
 st.sidebar.write("Illustrative maximum height: 45 ft")
 st.sidebar.write("Illustrative maximum coverage: 50%")
+if st.session_state.get("approved_demo_constraints"):
+    st.sidebar.caption("Approved document candidates are active in the demo geometry.")
 
 st.sidebar.divider()
 st.sidebar.subheader("Design your building")
@@ -620,15 +714,52 @@ st.sidebar.caption(
 # GEOMETRY ENGINE
 # ============================================================
 
+# The existing CITY GRID uses feet. Extracted metric constraints are converted
+# only after an explicit human approval for this illustrative demo.
+METRES_TO_FEET = 3.280839895
+approved_demo = st.session_state.get("approved_demo_constraints", {})
+active_front_setback = FRONT_SETBACK
+active_rear_setback = OTHER_SETBACK
+active_left_setback = OTHER_SETBACK
+active_right_setback = OTHER_SETBACK
+active_max_height = MAX_HEIGHT
+active_max_coverage = MAX_COVERAGE
+
+for constraint_type, item in approved_demo.items():
+    try:
+        value = float(item["value"])
+        unit = str(item.get("unit") or "").strip().lower()
+    except (TypeError, ValueError, KeyError):
+        continue
+
+    if constraint_type in {"front_setback", "rear_setback", "left_setback", "right_setback", "max_height"}:
+        if unit in {"m", "meter", "meters", "metre", "metres"}:
+            value *= METRES_TO_FEET
+        elif unit not in {"ft", "feet", "foot"}:
+            continue
+
+    if constraint_type == "front_setback":
+        active_front_setback = value
+    elif constraint_type == "rear_setback":
+        active_rear_setback = value
+    elif constraint_type == "left_setback":
+        active_left_setback = value
+    elif constraint_type == "right_setback":
+        active_right_setback = value
+    elif constraint_type == "max_height":
+        active_max_height = value
+    elif constraint_type == "max_site_coverage" and unit in {"%", "percent", "percentage"}:
+        active_max_coverage = value
+
 fig, result = build_3d_model(
     site_width=SITE_WIDTH,
     site_depth=SITE_DEPTH,
-    front_setback=FRONT_SETBACK,
-    rear_setback=OTHER_SETBACK,
-    left_setback=OTHER_SETBACK,
-    right_setback=OTHER_SETBACK,
-    max_height=MAX_HEIGHT,
-    max_coverage_percent=MAX_COVERAGE,
+    front_setback=active_front_setback,
+    rear_setback=active_rear_setback,
+    left_setback=active_left_setback,
+    right_setback=active_right_setback,
+    max_height=active_max_height,
+    max_coverage_percent=active_max_coverage,
     building_width=building_width,
     building_depth=building_depth,
     building_height=building_height,
@@ -711,7 +842,12 @@ with briefing1:
     )
 
 with briefing2:
-    st.metric("MISSION TIME", f"{QUEST_DURATION} SECONDS")
+    if is_timed_mode(st.session_state.game_mode):
+        st.metric("TIME LIMIT", "05:00")
+        st.caption("Competitive missions are strict timed challenges.")
+    else:
+        st.metric("MISSION TIME", "UNTIMED")
+        st.caption("Explore, design and experiment at your own pace.")
     st.metric("MAXIMUM REWARD", "500 XP")
 
 
@@ -748,7 +884,7 @@ st.caption(
 # ============================================================
 
 st.divider()
-st.subheader("⏱️ 60-SECOND BUILDING CHALLENGE")
+st.subheader("⏱️ MISSION CONTROL")
 
 timer_col, start_col, reset_col = st.columns([2, 1, 1])
 
@@ -764,7 +900,7 @@ with timer_col:
         st.error("Mission time expired.")
 
     else:
-        st.info("Prepare your design, then start the mission.")
+        st.info("Campaign: take your time. Competitive: complete the challenge within 5 minutes. Start when you are ready.")
 
 with start_col:
 
@@ -789,33 +925,26 @@ with reset_col:
 
 @st.fragment(run_every="1s")
 def render_timer():
-
     if st.session_state.quest_status != "active":
         return
 
-    deadline = st.session_state.quest_deadline
+    if not is_timed_mode(st.session_state.game_mode):
+        elapsed = max(0, int(time.time() - st.session_state.quest_started_at))
+        st.success("Campaign mission active · No countdown. Build at your own pace.")
+        st.metric("TIME ELAPSED", format_clock(elapsed))
+        return
 
-    remaining = max(
-        0,
-        int(deadline - time.time()) + 1,
-    )
+    deadline = st.session_state.quest_deadline
+    remaining = max(0, int(deadline - time.time()) + 1) if deadline else 0
 
     if remaining <= 0:
-
         record_failed_attempt()
-
-        st.error("TIME'S UP! Mission failed.")
-
+        st.error("TIME'S UP! Competitive attempt recorded as failed. You can retry.")
         st.rerun(scope="app")
+        return
 
-    else:
-
-        st.progress(remaining / QUEST_DURATION)
-
-        st.metric(
-            "TIME REMAINING",
-            f"{remaining} seconds",
-        )
+    st.progress(remaining / COMPETITIVE_DURATION_SECONDS)
+    st.metric("COMPETITIVE TIME REMAINING", format_clock(remaining))
 
 
 render_timer()
@@ -873,8 +1002,7 @@ if st.session_state.quest_status == "won":
 elif st.session_state.quest_status == "failed":
 
     st.error(
-        "MISSION FAILED — The countdown expired. "
-        "Reset or start another attempt."
+        "COMPETITIVE ATTEMPT EXPIRED — Reset and try again."
     )
 
 
@@ -889,7 +1017,7 @@ metric1, metric2, metric3, metric4 = st.columns(4)
 
 metric1.metric(
     "BUILDING STATUS",
-    "LEGAL" if result.is_valid else "ILLEGAL",
+    "WITHIN DEMO RULES" if result.is_valid else "DEMO RULES FAILED",
 )
 
 metric2.metric(
@@ -930,9 +1058,9 @@ with right:
     st.subheader("MISSION STATUS")
 
     if result.is_valid:
-        st.success("All geometry checks passed.")
+        st.success("All illustrative geometry checks passed.")
     else:
-        st.error("Building violations detected.")
+        st.error("Illustrative geometry violations detected.")
 
     if result.violations:
 
@@ -1009,6 +1137,176 @@ if st.button("🔍 Investigate", key="oracle_button"):
 
 if st.session_state.oracle_answer:
     st.info(st.session_state.oracle_answer)
+
+
+# ============================================================
+# REGULATION INTELLIGENCE — MUSE SPARK + EVIDENCE CHECKS
+# ============================================================
+
+st.divider()
+st.subheader("📄 REGULATION INTELLIGENCE ENGINE")
+st.caption(
+    "Upload a text-based regulation PDF. Muse Spark extracts candidate rules; "
+    "CODECRAFT checks source traceability before anything can be considered for review."
+)
+
+if "regulation_analysis" not in st.session_state:
+    st.session_state.regulation_analysis = None
+
+api_key_configured = bool(os.getenv("MODEL_API_KEY"))
+if not api_key_configured:
+    st.warning(
+        "Meta API is not configured yet. Add MODEL_API_KEY to a local .env file "
+        "in the project root, then restart Streamlit. Do not paste the key into this app or chat."
+    )
+
+uploaded_regulation = st.file_uploader(
+    "Upload a building regulation PDF",
+    type=["pdf"],
+    key="regulation_pdf_upload",
+    help="Text-based PDFs are supported in this first version. Scanned/image-only PDFs need OCR."
+)
+
+run_extraction = st.button(
+    "🧠 Analyse with Muse Spark",
+    key="run_regulation_analysis",
+    disabled=(uploaded_regulation is None or not api_key_configured),
+    width="stretch",
+)
+
+if run_extraction and uploaded_regulation is not None:
+    if uploaded_regulation.size > 10 * 1024 * 1024:
+        st.error("Please use a PDF smaller than 10 MB for this prototype.")
+    else:
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                temp_file.write(uploaded_regulation.getvalue())
+                temp_path = temp_file.name
+            with st.spinner("Extracting pages and asking Muse Spark to identify candidate constraints..."):
+                # A newly analysed document invalidates approvals from the previous upload.
+                st.session_state.approved_demo_constraints = {}
+                for state_key in list(st.session_state.keys()):
+                    if state_key.startswith("approve_demo_constraint_"):
+                        del st.session_state[state_key]
+                st.session_state.regulation_analysis = run_regulation_pipeline(temp_path)
+                st.session_state.regulation_analysis["document"]["file_name"] = uploaded_regulation.name
+            st.success("Analysis completed. Review each candidate below; none is automatically treated as legally verified.")
+        except (MetaAPIError, ValueError) as exc:
+            st.error(f"Regulation analysis could not be completed: {exc}")
+        except Exception as exc:
+            st.error(f"Unexpected analysis error: {exc}")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+analysis = st.session_state.regulation_analysis
+if analysis:
+    doc = analysis["document"]
+    st.write(
+        f"**Document:** {doc['file_name']} · **Pages:** {doc['page_count']} · "
+        f"**Provider:** {analysis['provider']} · **Model:** {analysis['model']}"
+    )
+    st.warning(
+        "DEMO SAFETY: Evidence checks confirm source traceability only. They do not "
+        "confirm legal applicability or certify compliance. Approving a candidate "
+        "below applies it only to this prototype's illustrative 3D simulation."
+    )
+    st.info(analysis["disclaimer"])
+
+    candidates = analysis.get("constraints", [])
+    eligible_candidate_indexes = []
+    if not candidates:
+        st.warning("No supported numeric constraints were extracted from this document.")
+    for idx, candidate in enumerate(candidates, start=1):
+        checks = candidate.get("evidence_check", {})
+        with st.expander(
+            f"Candidate {idx}: {candidate.get('constraint_type', 'unknown')} — "
+            f"{candidate.get('status', 'unresolved').upper()}",
+            expanded=True,
+        ):
+            st.write(
+                f"**Value:** {candidate.get('value')} {candidate.get('unit') or ''} · "
+                f"**Page:** {candidate.get('page_number')} · "
+                f"**Clause:** {candidate.get('clause_reference') or 'Not supplied'}"
+            )
+            st.write("**Source excerpt:**")
+            st.code(candidate.get("source_excerpt", "No excerpt returned"), language="text")
+            if checks.get("passed"):
+                st.success("Basic source traceability checks passed. Human review is still required.")
+            else:
+                st.error("Evidence checks failed: " + ", ".join(checks.get("issues", [])))
+
+            constraint_type = candidate.get("constraint_type")
+            unit = str(candidate.get("unit") or "").strip().lower()
+            try:
+                numeric_value = float(candidate.get("value"))
+            except (TypeError, ValueError):
+                numeric_value = None
+
+            supported_units = {
+                "front_setback": {"m", "meter", "meters", "metre", "metres", "ft", "feet", "foot"},
+                "rear_setback": {"m", "meter", "meters", "metre", "metres", "ft", "feet", "foot"},
+                "left_setback": {"m", "meter", "meters", "metre", "metres", "ft", "feet", "foot"},
+                "right_setback": {"m", "meter", "meters", "metre", "metres", "ft", "feet", "foot"},
+                "max_height": {"m", "meter", "meters", "metre", "metres", "ft", "feet", "foot"},
+                "max_site_coverage": {"%", "percent", "percentage"},
+            }
+            eligible = (
+                checks.get("passed") is True
+                and constraint_type in supported_units
+                and unit in supported_units.get(constraint_type, set())
+                and numeric_value is not None
+                and numeric_value > 0
+            )
+            if eligible:
+                eligible_candidate_indexes.append(idx)
+                st.checkbox(
+                    "I reviewed this source and approve it for the demo 3D simulation",
+                    key=f"approve_demo_constraint_{idx}",
+                )
+            else:
+                st.caption(
+                    "Not eligible for demo application: evidence must pass and the "
+                    "constraint type/unit must be supported. Human review is still required."
+                )
+            st.caption("No candidate is applied unless you explicitly approve it below.")
+
+    if eligible_candidate_indexes:
+        if st.button("Apply selected approvals to demo geometry", key="apply_approved_demo_constraints", width="stretch"):
+            newly_approved = {}
+            for idx in eligible_candidate_indexes:
+                candidate = candidates[idx - 1]
+                if st.session_state.get(f"approve_demo_constraint_{idx}", False):
+                    newly_approved[candidate["constraint_type"]] = {
+                        "value": candidate["value"],
+                        "unit": candidate.get("unit"),
+                        "page_number": candidate.get("page_number"),
+                        "source_excerpt": candidate.get("source_excerpt"),
+                        "document_id": candidate.get("document_id"),
+                    }
+            if newly_approved:
+                st.session_state.approved_demo_constraints.update(newly_approved)
+                st.success("Approved constraints saved for the demo simulation. The 3D model will refresh now.")
+                st.rerun()
+            else:
+                st.warning("Select at least one eligible candidate before applying approvals.")
+
+    if st.session_state.get("approved_demo_constraints"):
+        st.write("**Currently applied to demo geometry:**")
+        for approved_type, approved_item in st.session_state.approved_demo_constraints.items():
+            st.write(f"- {approved_type}: {approved_item['value']} {approved_item.get('unit') or ''}")
+        if st.button("Restore illustrative default geometry rules", key="reset_demo_geometry_rules"):
+            st.session_state.approved_demo_constraints = {}
+            st.rerun()
+
+    if analysis.get("ambiguities"):
+        st.subheader("Ambiguities requiring review")
+        for ambiguity in analysis["ambiguities"]:
+            st.warning(str(ambiguity))
+
+    with st.expander("View complete extraction result (JSON)"):
+        st.json(analysis)
 
 
 # ============================================================

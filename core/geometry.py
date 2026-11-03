@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass, asdict
 from typing import Any
 
@@ -60,7 +59,6 @@ def calculate_geometry(
     max_height: float,
     max_coverage_percent: float,
 ) -> GeometryResult:
-
     # 1. Validate input dimensions
     validate_positive("Site width", site.width)
     validate_positive("Site depth", site.depth)
@@ -75,7 +73,6 @@ def calculate_geometry(
         "Left setback": setbacks.left,
         "Right setback": setbacks.right,
     }
-
     for name, value in setback_values.items():
         if value < 0:
             raise ValueError(f"{name} cannot be negative.")
@@ -84,52 +81,35 @@ def calculate_geometry(
         raise ValueError("Maximum coverage must be between 0 and 100.")
 
     # 2. Calculate the buildable envelope
-    buildable_width = (
-        site.width - setbacks.left - setbacks.right
-    )
-
-    buildable_depth = (
-        site.depth - setbacks.front - setbacks.rear
-    )
-
+    buildable_width = site.width - setbacks.left - setbacks.right
+    buildable_depth = site.depth - setbacks.front - setbacks.rear
     if buildable_width <= 0 or buildable_depth <= 0:
-        raise ValueError(
-            "Setbacks leave no positive buildable envelope."
-        )
+        raise ValueError("Setbacks leave no positive buildable envelope.")
 
     site_area = site.width * site.depth
     buildable_area = buildable_width * buildable_depth
 
     # 3. Calculate permitted coverage
-    max_coverage_area = (
-        site_area * max_coverage_percent / 100
-    )
+    max_coverage_area = site_area * max_coverage_percent / 100
 
     # 4. Calculate proposed building footprint
     building_footprint = building.width * building.depth
-
-    actual_coverage_percent = (
-        building_footprint / site_area
-    ) * 100
+    actual_coverage_percent = (building_footprint / site_area) * 100
 
     # 5. Calculate building boundaries
     building_left = building.x
     building_right = building.x + building.width
-
     building_front = building.y
     building_rear = building.y + building.depth
 
     # 6. Calculate permitted boundaries
     permitted_left = setbacks.left
     permitted_right = site.width - setbacks.right
-
     permitted_front = setbacks.front
     permitted_rear = site.depth - setbacks.rear
 
     # 7. Check every violation independently
     violations = []
-
-    # Plot boundary checks
     if (
         building_left < 0
         or building_right > site.width
@@ -138,7 +118,6 @@ def calculate_geometry(
     ):
         violations.append("SITE_BOUNDARY_VIOLATION")
 
-    # Setback checks
     if (
         building_left < permitted_left
         or building_right > permitted_right
@@ -147,11 +126,8 @@ def calculate_geometry(
     ):
         violations.append("SETBACK_VIOLATION")
 
-    # Height checks
     if building.height > max_height:
         violations.append("HEIGHT_VIOLATION")
-
-    # Coverage checks
     if building_footprint > max_coverage_area:
         violations.append("COVERAGE_VIOLATION")
 
@@ -166,15 +142,9 @@ def calculate_geometry(
         "permitted_front": permitted_front,
         "permitted_rear": permitted_rear,
         "height_excess": max(0, building.height - max_height),
-        "coverage_excess_area": max(
-            0, building_footprint - max_coverage_area
-        ),
-        "width_outside_envelope": max(
-            0, building.width - buildable_width
-        ),
-        "depth_outside_envelope": max(
-            0, building.depth - buildable_depth
-        ),
+        "coverage_excess_area": max(0, building_footprint - max_coverage_area),
+        "width_outside_envelope": max(0, building.width - buildable_width),
+        "depth_outside_envelope": max(0, building.depth - buildable_depth),
     }
 
     return GeometryResult(
