@@ -210,19 +210,9 @@ For the best understanding of the project, we recommend this sequence:
 
 The regulation analysis workflow requires a configured Muse Spark API key. The core simulator can be explored without it.
 
-## 9. Limitations and Future Scope
+## 9.Future Scope
 
 CODECRAFT 3D is an experimental engineering and educational prototype.
-
-Current limitations include:
-
-- Extracted regulatory requirements require human review and approval.
-- Evidence traceability does not establish legal applicability.
-- PDF processing currently relies on embedded document text; scanned-document OCR is not yet supported.
-- Engineering evaluation is limited to implemented geometry rules and configured constraints.
-- Advanced dependency and change-impact capabilities require further integration into the primary application workflow.
-
-### Future Scope
 
 - Live constraint ripple simulation across dependent building parameters.
 - More advanced regulatory dependency and conflict analysis.
