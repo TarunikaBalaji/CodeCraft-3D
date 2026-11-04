@@ -1,0 +1,39 @@
+CODECRAFT 3D — CONSOLIDATED APPROVAL + GEOMETRY PATCH
+
+This is one consolidated replacement package. It supersedes the earlier
+approval_geometry_patch ZIP. It contains:
+- app.py: approval workflow, explicit demo-only safety copy, original uploaded
+  filename display, and approved-rule-to-3D geometry mapping.
+- core/geometry.py: the geometry module supplied for this integration
+  (preserved, not redesigned).
+- tests/test_consolidated_patch.py: focused regression tests.
+
+INSTALL
+1. Stop Streamlit (Ctrl+C).
+2. Make a backup copy of your current app.py and core/geometry.py.
+3. Extract this ZIP into the existing CODECRAFT 3D project root, preserving
+   folders, and overwrite app.py and core/geometry.py when prompted.
+4. Do not replace or edit .env. Do not share your API key.
+5. Activate your existing virtual environment and run:
+      python -m pytest -q
+      streamlit run app.py
+
+BEHAVIOUR / LIMITATIONS
+- Extracted candidates are not applied automatically.
+- A candidate must pass source-traceability checks, have a supported type/unit,
+  and be explicitly approved for the prototype simulation.
+- Metric linear values are converted to feet before calling the existing
+  geometry engine. Percentages remain percentages.
+- Ambiguous/missing constraints remain visible as review warnings; they are
+  not guessed or silently applied.
+- The current geometry engine does not implement a minimum plot-area rule.
+- Approval means approval for this illustrative demo simulation only. It is
+  NOT legal verification, certification, or advice.
+- Existing CITY GRID site dimensions remain 40 x 60 ft. Extracted constraints
+  are applied to that site, not to the synthetic PDF's example 20 x 30 m plot.
+
+VALIDATION NOTE
+Python syntax compilation is included in the packaging checks. The focused
+tests are included for you to run in your existing project environment.
+The full original project test suite and live Streamlit UI have not been run
+inside this packaging environment.
